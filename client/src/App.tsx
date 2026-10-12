@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import type { Message } from './types'
 import Background from './components/Background'
 import HistoryOverlay from './components/HistoryOverlay'
@@ -14,17 +14,19 @@ export default function App() {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [streaming, setStreaming] = useState(true)
   const [historyOpen, setHistoryOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const onStreamEnd = useCallback(() => setStreaming(false), [])
 
   async function send() {
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || streaming) return
     const next: Message[] = [...messages, { role: 'user', content: text }]
+    setStreaming(true)
     setMessages(next)
     setInput('')
     setLoading(true)
-    inputRef.current?.focus()
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -32,8 +34,10 @@ export default function App() {
         body: JSON.stringify({ messages: next }),
       })
       const data = await res.json()
+      setStreaming(true)
       setMessages([...next, { role: 'assistant', content: data.reply }])
     } catch {
+      setStreaming(true)
       setMessages([...next, { role: 'assistant', content: 'Something went wrong... Are you still there?' }])
     } finally {
       setLoading(false)
@@ -44,8 +48,10 @@ export default function App() {
     <div className="relative w-screen h-screen overflow-hidden select-none" style={{ fontFamily: "'Noto Sans', sans-serif" }}>
       <Background />
       {historyOpen && <HistoryOverlay messages={messages} onClose={() => setHistoryOpen(false)} />}
-      <DialogueBox last={messages[messages.length - 1]}>
-        <ChatInput value={input} onChange={setInput} onSend={send} disabled={loading} inputRef={inputRef} />
+      <DialogueBox last={messages[messages.length - 1]} onStreamEnd={onStreamEnd}>
+        {!streaming && !loading && (
+          <ChatInput value={input} onChange={setInput} onSend={send} disabled={false} inputRef={inputRef} />
+        )}
         <NavBar onToggleHistory={() => setHistoryOpen(h => !h)} />
       </DialogueBox>
     </div>

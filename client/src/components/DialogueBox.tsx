@@ -1,13 +1,39 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Message } from '../types'
 
 interface Props {
   last: Message
+  onStreamEnd?: () => void
   children: ReactNode
 }
 
-export default function DialogueBox({ last, children }: Props) {
+const CHARS_PER_TICK = 1
+const TICK_MS = 28
+
+export default function DialogueBox({ last, onStreamEnd, children }: Props) {
   const isMonika = last.role === 'assistant'
+  const [shown, setShown] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setShown('')
+    let i = 0
+    const id = setInterval(() => {
+      i = Math.min(i + CHARS_PER_TICK, last.content.length)
+      setShown(last.content.slice(0, i))
+      if (i >= last.content.length) {
+        clearInterval(id)
+        onStreamEnd?.()
+      }
+    }, TICK_MS)
+    return () => clearInterval(id)
+  }, [last.content, onStreamEnd])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [shown])
 
   return (
     <div className="absolute bottom-0 left-0 right-0 z-20 mx-32 my-2">
@@ -37,9 +63,13 @@ export default function DialogueBox({ last, children }: Props) {
           backgroundPosition: '0 0, 32px 32px'
         }} />
 
-        <div className="relative px-8 pt-4 pb-2 min-h-[100px] max-h-[160px] overflow-y-auto">
+        <div ref={scrollRef} className="relative px-8 pt-4 pb-2 min-h-[100px] max-h-[160px] overflow-y-auto">
           <p className="text-lg leading-relaxed" style={{ color: '#4a2040', fontFamily: 'Eczar, serif' }}>
-            {last.content}
+            {shown}
+            {shown.length < last.content.length && (
+              <span className="inline-block w-[0.55em] h-[1.1em] align-[-0.15em] ml-0.5 animate-pulse"
+                style={{ background: 'rgba(74,32,64,0.55)' }} />
+            )}
           </p>
         </div>
 
