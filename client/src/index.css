@@ -1,0 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Eczar:wght@400;600;700&family=Noto+Sans:ital,wght@0,400;0,600;1,400&display=swap');
+@import "tailwindcss";
+
+:root {
+  --ddlc-pink: #ffb7c5;
+  --ddlc-dark-pink: #d1548a;
+  --ddlc-white: #fff9fb;
+  --ddlc-grey: #5a4a5a;
+  --ddlc-green: #a8d8a8;
+}
+
+body {
+  margin: 0;
+  font-family: 'Noto Sans', sans-serif;
+  background: var(--ddlc-white);
+}
