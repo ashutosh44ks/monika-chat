@@ -1,7 +1,6 @@
 import { useState, useRef } from 'react'
 import type { Message } from './types'
 import Background from './components/Background'
-import MonikaSprite from './components/MonikaSprite'
 import HistoryOverlay from './components/HistoryOverlay'
 import DialogueBox from './components/DialogueBox'
 import ChatInput from './components/ChatInput'
@@ -44,7 +43,6 @@ export default function App() {
   return (
     <div className="relative w-screen h-screen overflow-hidden select-none" style={{ fontFamily: "'Noto Sans', sans-serif" }}>
       <Background />
-      <MonikaSprite />
       {historyOpen && <HistoryOverlay messages={messages} onClose={() => setHistoryOpen(false)} />}
       <DialogueBox last={messages[messages.length - 1]}>
         <ChatInput value={input} onChange={setInput} onSend={send} disabled={loading} inputRef={inputRef} />

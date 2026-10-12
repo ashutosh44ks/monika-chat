@@ -1,5 +1,4 @@
-// Replace with an actual classroom image by putting it at /public/classroom.webp
-const BG = '/classroom.webp'
+const BG = '/Mon_cg.webp'
 
 export default function Background() {
   return (
