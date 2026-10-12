@@ -1,34 +1,58 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Message } from '../types'
+import { useDialogue } from '../context/DialogueContext'
 
 interface Props {
   last: Message
-  onStreamEnd?: () => void
   children: ReactNode
 }
 
 const CHARS_PER_TICK = 1
 const TICK_MS = 28
 
-export default function DialogueBox({ last, onStreamEnd, children }: Props) {
+export default function DialogueBox({ last, children }: Props) {
+  const { auto, skipTick, endStream } = useDialogue()
   const isMonika = last.role === 'assistant'
   const [shown, setShown] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    if (!auto) {
+      setShown(last.content)
+      endStream()
+      return
+    }
     setShown('')
     let i = 0
-    const id = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       i = Math.min(i + CHARS_PER_TICK, last.content.length)
       setShown(last.content.slice(0, i))
       if (i >= last.content.length) {
-        clearInterval(id)
-        onStreamEnd?.()
+        clearInterval(intervalRef.current!)
+        intervalRef.current = null
+        endStream()
       }
     }, TICK_MS)
-    return () => clearInterval(id)
-  }, [last.content, onStreamEnd])
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }, [last.content, auto, endStream])
+
+  useEffect(() => {
+    if (!skipTick || !auto) return
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    setShown(last.content)
+    endStream()
+  }, [skipTick, last.content, auto, endStream])
 
   useEffect(() => {
     const el = scrollRef.current

@@ -69,8 +69,8 @@ app.post('/api/chat', async (req, res) => {
     const data = await response.json() as {
       choices: Array<{ message: { content: string } }>
     }
-    const reply = data.choices[0]?.message?.content ?? "I... don't know what to say."
-    res.json({ reply })
+    const content = data.choices[0]?.message?.content ?? "I... don't know what to say."
+    res.json({ type: 'reply', content })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: 'Internal server error' })
