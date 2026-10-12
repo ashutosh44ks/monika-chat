@@ -31,6 +31,49 @@ interface Message {
   content: string
 }
 
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+async function openRouterChat(messages: Message[], attempts = 3): Promise<Response> {
+  const body = JSON.stringify({
+    models: ['google/gemma-4-31b-it:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'google/gemma-4-26b-a4b-it:free'],
+    messages: [
+      { role: 'system', content: MONIKA_SYSTEM_PROMPT },
+      ...messages.map(m => ({ role: m.role, content: m.content })),
+    ],
+    max_tokens: 500,
+    temperature: 0.85,
+  })
+
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'http://localhost:5173',
+          'X-Title': 'Monika Chat',
+        },
+        body,
+      })
+      // Retry free-tier rate limits / transient gateway errors
+      if ((response.status === 429 || response.status >= 500) && i < attempts - 1) {
+        await sleep(400 * (i + 1))
+        continue
+      }
+      return response
+    } catch (e) {
+      lastErr = e
+      if (i < attempts - 1) {
+        await sleep(400 * (i + 1))
+        continue
+      }
+    }
+  }
+  throw lastErr
+}
+
 app.post('/api/chat', async (req, res) => {
   const { messages } = req.body as { messages: Message[] }
 
@@ -40,24 +83,7 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'http://localhost:5173',
-        'X-Title': 'Monika Chat',
-      },
-      body: JSON.stringify({
-        models: ['google/gemma-4-31b-it:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'google/gemma-4-26b-a4b-it:free'],
-        messages: [
-          { role: 'system', content: MONIKA_SYSTEM_PROMPT },
-          ...messages.map(m => ({ role: m.role, content: m.content })),
-        ],
-        max_tokens: 500,
-        temperature: 0.85,
-      }),
-    })
+    const response = await openRouterChat(messages)
 
     if (!response.ok) {
       const err = await response.text()
