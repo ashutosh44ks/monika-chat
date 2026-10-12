@@ -20,7 +20,7 @@ export default function NavBar() {
       </button>
       <span className="opacity-30">|</span>
       <button
-        className={`hover:text-pink-800 transition-colors ${auto ? '' : 'opacity-40'}`}
+        className={`hover:text-pink-800 transition-colors ${auto ? 'text-white' : 'opacity-40'}`}
         onClick={toggleAuto}
       >
         Auto
