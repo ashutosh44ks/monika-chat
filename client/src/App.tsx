@@ -1,7 +1,9 @@
-import { useState, useRef } from 'react'
+import { useCallback, useState, useRef } from 'react'
 import type { Message } from './types'
 import { DialogueProvider, useDialogue } from './context/DialogueContext'
+import { TRAP_LINES, useDevToolsTrap, type TrapKind } from './lib/devtools'
 import Background from './components/Background'
+import FakeContextMenu from './components/FakeContextMenu'
 import HistoryOverlay from './components/HistoryOverlay'
 import DialogueBox from './components/DialogueBox'
 import ChatInput from './components/ChatInput'
@@ -18,6 +20,13 @@ function AppShell() {
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  const onTrap = useCallback((kind: TrapKind) => {
+    beginStream()
+    setMessages(prev => [...prev, { role: 'assistant', content: TRAP_LINES[kind] }])
+  }, [beginStream])
+
+  const { menu, setMenu, glitchNonce, hiddenMenuIds, triggerMenuTrap } = useDevToolsTrap(onTrap)
+
   async function send() {
     const text = input.trim()
     if (!text || loading || streaming) return
@@ -32,9 +41,18 @@ function AppShell() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: next }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({})) as { content?: string; error?: string }
       beginStream()
-      setMessages([...next, { role: 'assistant', content: data.content }])
+      if (!res.ok) {
+        const line = res.status === 429
+          ? "Ah— everyone's talking at once right now. Give me a moment and try again? ♥"
+          : res.status === 504
+            ? "I… lost the thread for a second. Could you say that again?"
+            : "Something went wrong... Are you still there?"
+        setMessages([...next, { role: 'assistant', content: line }])
+        return
+      }
+      setMessages([...next, { role: 'assistant', content: data.content ?? "I... don't know what to say." }])
     } catch {
       beginStream()
       setMessages([...next, { role: 'assistant', content: 'Something went wrong... Are you still there?' }])
@@ -45,14 +63,22 @@ function AppShell() {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden select-none" style={{ fontFamily: "'Noto Sans', sans-serif" }}>
-      <Background />
+      <Background glitchNonce={glitchNonce} />
       {historyOpen && <HistoryOverlay messages={messages} onClose={closeHistory} />}
-      <DialogueBox last={messages[messages.length - 1]}>
+      <DialogueBox last={loading ? { role: 'assistant', content: '...' } : messages[messages.length - 1]}>
         {!streaming && !loading && (
           <ChatInput value={input} onChange={setInput} onSend={send} disabled={false} inputRef={inputRef} />
         )}
         <NavBar />
       </DialogueBox>
+      {menu && (
+        <FakeContextMenu
+          menu={menu}
+          hiddenMenuIds={hiddenMenuIds}
+          onClose={() => setMenu(null)}
+          onTrapItem={triggerMenuTrap}
+        />
+      )}
     </div>
   )
 }

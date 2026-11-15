@@ -65,7 +65,28 @@ const FREE_MODELS = [
   'nvidia/nemotron-3-super-120b-a12b:free',
 ] as const
 
-async function openRouterChat(messages: Message[], system: string): Promise<Response> {
+const clip = (s: string, n = 120) =>
+  s.length <= n ? s : `${s.slice(0, n)}…`
+
+const FETCH_TIMEOUT_MS = 20_000
+const ATTEMPTS_PER_MODEL = 2
+
+class UpstreamExhaustedError extends Error {
+  status: number
+  body: string
+  model: string
+  constructor(status: number, body: string, model: string) {
+    super(`OpenRouter exhausted: ${status}`)
+    this.status = status
+    this.body = body
+    this.model = model
+  }
+}
+
+async function openRouterChat(
+  messages: Message[],
+  system: string,
+): Promise<{ response: Response; model: (typeof FREE_MODELS)[number] }> {
   const payload = {
     messages: [
       { role: 'system', content: system },
@@ -85,10 +106,16 @@ async function openRouterChat(messages: Message[], system: string): Promise<Resp
     temperature: 0.9,
   }
 
-  let lastResponse: Response | undefined
-  let lastErr: unknown
+  let lastStatus = 502
+  let lastBody = ''
+  let lastModel: (typeof FREE_MODELS)[number] = FREE_MODELS[0]
+
   for (const model of FREE_MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < ATTEMPTS_PER_MODEL; attempt++) {
+      lastModel = model
+      const isLastAttempt = attempt === ATTEMPTS_PER_MODEL - 1
+      console.log(`[openrouter] → POST chat/completions model=${model} attempt=${attempt + 1}/${ATTEMPTS_PER_MODEL}`)
+      const t0 = Date.now()
       try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -99,34 +126,60 @@ async function openRouterChat(messages: Message[], system: string): Promise<Resp
             'X-Title': 'Monika Chat',
           },
           body: JSON.stringify({ ...payload, model }),
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         })
-        if (response.ok) return response
-        lastResponse = response
-        if (response.status === 429 || response.status >= 500) {
+        const ms = Date.now() - t0
+        if (response.ok) {
+          console.log(`[openrouter] ← ${response.status} ok model=${model} ${ms}ms`)
+          return { response, model }
+        }
+        const errBody = await response.text().catch(() => '')
+        lastStatus = response.status
+        lastBody = errBody
+        console.warn(`[openrouter] ← ${response.status} fail model=${model} ${ms}ms ${clip(errBody, 200)}`)
+
+        const retryable = response.status === 429 || response.status >= 500
+        if (retryable && !isLastAttempt) {
+          console.log(`[openrouter] retrying after ${400 * (attempt + 1)}ms`)
           await sleep(400 * (attempt + 1))
           continue
         }
-        break // hard 4xx on this model → try next
+        console.log(`[openrouter] giving up on ${model}`)
+        break
       } catch (e) {
-        lastErr = e
-        await sleep(400 * (attempt + 1))
+        lastStatus = 504
+        lastBody = e instanceof Error ? e.message : String(e)
+        console.error(`[openrouter] error model=${model} attempt=${attempt + 1}:`, lastBody)
+        if (!isLastAttempt) {
+          await sleep(400 * (attempt + 1))
+          continue
+        }
+        break
       }
     }
   }
-  if (lastResponse) return lastResponse
-  throw lastErr
+
+  console.error(`[openrouter] all models exhausted  last=${lastModel} status=${lastStatus}`)
+  throw new UpstreamExhaustedError(lastStatus, lastBody, lastModel)
 }
 
 app.post('/api/chat', async (req, res) => {
-  const { messages } = req.body as { messages: Message[] }
+  const t0 = Date.now()
+  const { messages } = req.body as {
+    messages: Message[]
+  }
+  const lastUser = [...(messages ?? [])].reverse().find(m => m.role === 'user')
+  console.log(`[chat] request received  messages=${messages?.length ?? 0}  lastUser="${clip(lastUser?.content ?? '')}"`)
 
   if (!OPENROUTER_API_KEY) {
+    console.error('[chat] OPENROUTER_API_KEY not set — aborting')
     res.status(500).json({ error: 'OPENROUTER_API_KEY not set' })
     return
   }
 
   try {
     const memory = await loadMemory()
+    console.log(`[chat] memory loaded  name=${memory.name ?? '(none)'}  facts=${memory.facts?.length ?? 0}`)
     const system = [
       MONIKA_SYSTEM_PROMPT,
       '',
@@ -135,26 +188,37 @@ app.post('/api/chat', async (req, res) => {
       MEMORY_PROTOCOL,
     ].join('\n')
 
-    const response = await openRouterChat(messages, system)
-
-    if (!response.ok) {
-      const err = await response.text()
-      console.error('OpenRouter error:', err)
-      res.status(502).json({ error: 'Upstream error' })
-      return
-    }
+    console.log('[chat] calling OpenRouter…')
+    const { response, model } = await openRouterChat(messages, system)
 
     const data = await response.json() as {
       choices: Array<{ message: { content: string } }>
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
     }
     const raw = data.choices[0]?.message?.content ?? "I... don't know what to say."
+    const usage = data.usage
+    if (usage) {
+      console.log(`[chat] usage  prompt=${usage.prompt_tokens ?? '?'}  completion=${usage.completion_tokens ?? '?'}  total=${usage.total_tokens ?? '?'}`)
+    }
     const { clean, name, facts } = extractMemoryUpdates(raw)
     if (name || facts.length) {
       await saveMemory(mergeMemory(memory, name, facts))
+      console.log(`[chat] memory updated  name=${name ?? '(unchanged)'}  +facts=${facts.length}`)
     }
+    console.log(`[chat] reply ready  model=${model}  ${Date.now() - t0}ms  "${clip(clean)}"`)
     res.json({ type: 'reply', content: clean })
+    console.log(`[chat] response sent  ${Date.now() - t0}ms`)
   } catch (e) {
-    console.error(e)
+    if (e instanceof UpstreamExhaustedError) {
+      const status = e.status === 429 ? 429 : e.status === 504 ? 504 : 502
+      console.error(`[chat] upstream exhausted  ${status} model=${e.model} ${Date.now() - t0}ms ${clip(e.body, 200)}`)
+      res.status(status).json({
+        error: status === 429 ? 'Rate limited' : status === 504 ? 'Upstream timeout' : 'Upstream error',
+      })
+      console.log(`[chat] error response sent  ${status}  ${Date.now() - t0}ms`)
+      return
+    }
+    console.error(`[chat] failed  ${Date.now() - t0}ms:`, e)
     res.status(500).json({ error: 'Internal server error' })
   }
 })
